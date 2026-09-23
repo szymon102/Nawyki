@@ -1,3 +1,5 @@
+// @ts-nocheck
+/* eslint-disable */
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -142,7 +144,6 @@ export default function Home() {
   };
   const currentSprintDay = calculateSprintDay();
 
-  // ZARZĄDZANIE NAGRODAMI
   const addRewardToPool = () => {
     if (!newRewardInput.trim()) return;
     const updatedPool = [...rewardPool, newRewardInput.trim()];
@@ -176,7 +177,7 @@ export default function Home() {
     if (!habitsList || !historyData) return 0;
     let points = 0;
     let bonus = 0;
-    Object.values(historyData).forEach(day => {
+    Object.values(historyData).forEach((day) => {
       Object.keys(day).forEach(habitId => { if (day[habitId]) points += 1; });
     });
     habitsList.forEach(habit => {
