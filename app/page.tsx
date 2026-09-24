@@ -35,24 +35,29 @@ export default function Home() {
   // UI STATES
   const [showSettings, setShowSettings] = useState(false);
   const [activeSettingsTab, setActiveSettingsTab] = useState(null); 
-  const [showRivalHabits, setShowRivalHabits] = useState(false); // NOWY STAN DLA PODGLĄDU
+  const [showRivalHabits, setShowRivalHabits] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
 
   const weekDays = getLast7Days();
   const [activeDayIndex, setActiveDayIndex] = useState(6); 
   const activeDay = weekDays[activeDayIndex];
   const isLocked = activeDay.locked;
 
-  // NAWYKI I HISTORIA
+  // USER DATA & SYNC
+  const [isReady, setIsReady] = useState(false);
+  const [notifications, setNotifications] = useState([]);
   const [habits, setHabits] = useState([]); 
   const [history, setHistory] = useState({});
+  const [myCode, setMyCode] = useState('');
+  const [rivalId, setRivalId] = useState(null);
+  
+  // FORMS
   const [newHabitName, setNewHabitName] = useState('');
   const [newHabitType, setNewHabitType] = useState('daily');
   const [newHabitTarget, setNewHabitTarget] = useState(3);
-
-  // RYWAl I PAROWANIE
-  const [myCode, setMyCode] = useState('');
-  const [rivalId, setRivalId] = useState(null);
   const [rivalInput, setRivalInput] = useState('');
+  
+  // RIVAL DATA SYNC
   const [rivalData, setRivalData] = useState(null);
 
   // META-GRA (SPRINTY I NAGRODY)
@@ -65,6 +70,7 @@ export default function Home() {
     'Karny trening (pompki/przysiady)'
   ];
   const defaultRewards = {
+    sprintActive: false, 
     sprintStart: weekDays[6].fullDate,
     stake: RANDOM_STAKE,
     seasonPrize: 'Weekendowy wyjazd',
@@ -79,60 +85,64 @@ export default function Home() {
   const [rewardPool, setRewardPool] = useState(defaultPool);
   const [newRewardInput, setNewRewardInput] = useState('');
 
+  // END SPRINT ANIMATION
   const [showEndModal, setShowEndModal] = useState(false);
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentDrawItem, setCurrentDrawItem] = useState('');
   const [finalDrawItem, setFinalDrawItem] = useState('');
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+    const unsubAuth = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
-      if (currentUser) {
-        const docRef = doc(db, 'users', currentUser.uid);
-        const docSnap = await getDoc(docRef);
-        
-        const displayName = currentUser.displayName?.split(' ')[0] || 'Gracz';
-        
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          setHabits(data.habits || []);
-          setHistory(data.history || {});
-          setRivalId(data.rivalId || null);
-          
-          const loadedRewards = data.rewards || defaultRewards;
-          setRewards(loadedRewards);
-          setEditStake(loadedRewards.stake || defaultRewards.stake);
-          setEditSeasonPrize(loadedRewards.seasonPrize || defaultRewards.seasonPrize);
-          setRewardPool(loadedRewards.pool || defaultPool);
-          
-          if (!data.inviteCode) {
-            const newCode = currentUser.uid.substring(0, 5).toUpperCase();
-            saveDataToCloud({ inviteCode: newCode, displayName }, currentUser.uid);
-            setMyCode(newCode);
-          } else { 
-            setMyCode(data.inviteCode);
-            saveDataToCloud({ displayName }, currentUser.uid); 
-          }
-        } else {
-          const newCode = currentUser.uid.substring(0, 5).toUpperCase();
-          saveDataToCloud({ inviteCode: newCode, displayName, habits: [], history: {}, rewards: defaultRewards }, currentUser.uid);
-          setMyCode(newCode);
-          setEditStake(defaultRewards.stake);
-          setEditSeasonPrize(defaultRewards.seasonPrize);
-          setRewardPool(defaultPool);
-        }
-      }
-      setLoading(false);
+      if (!currentUser) setLoading(false);
     });
-    return () => unsubscribe();
+    return () => unsubAuth();
   }, []);
 
   useEffect(() => {
+    if (!user) return;
+    const unsubMe = onSnapshot(doc(db, 'users', user.uid), (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setHabits(data.habits || []);
+        setHistory(data.history || {});
+        setRivalId(data.rivalId || null);
+        setIsReady(data.isReady || false);
+        setNotifications(data.notifications || []);
+        
+        const loadedRewards = data.rewards || defaultRewards;
+        if (loadedRewards.sprintActive === undefined) loadedRewards.sprintActive = false;
+        
+        setRewards(loadedRewards);
+        setEditStake(loadedRewards.stake || defaultRewards.stake);
+        setEditSeasonPrize(loadedRewards.seasonPrize || defaultRewards.seasonPrize);
+        setRewardPool(loadedRewards.pool || defaultPool);
+        
+        const displayName = user.displayName?.split(' ')[0] || 'Gracz';
+        if (!data.inviteCode) {
+          const newCode = user.uid.substring(0, 5).toUpperCase();
+          saveDataToCloud({ inviteCode: newCode, displayName }, user.uid);
+          setMyCode(newCode);
+        } else { 
+          setMyCode(data.inviteCode);
+          if (data.displayName !== displayName) saveDataToCloud({ displayName }, user.uid); 
+        }
+      } else {
+        const newCode = user.uid.substring(0, 5).toUpperCase();
+        const displayName = user.displayName?.split(' ')[0] || 'Gracz';
+        saveDataToCloud({ inviteCode: newCode, displayName, isReady: false, habits: [], history: {}, notifications: [], rewards: defaultRewards }, user.uid);
+      }
+      setLoading(false);
+    });
+    return () => unsubMe();
+  }, [user]);
+
+  useEffect(() => {
     if (!rivalId) return;
-    const unsubscribe = onSnapshot(doc(db, 'users', rivalId), (docSnap) => {
+    const unsubRival = onSnapshot(doc(db, 'users', rivalId), (docSnap) => {
       if (docSnap.exists()) setRivalData(docSnap.data());
     });
-    return () => unsubscribe();
+    return () => unsubRival();
   }, [rivalId]);
 
   const saveDataToCloud = async (newData, customUid = null) => {
@@ -140,6 +150,47 @@ export default function Home() {
     if (!targetUid) return;
     const docRef = doc(db, 'users', targetUid);
     await setDoc(docRef, newData, { merge: true });
+  };
+
+  // SYSTEM POWIADOMIEŃ I AKCEPTACJI CELÓW
+  const notifyRival = async (type, text, habitInfo = null) => {
+    if (!rivalId || !rivalData) return;
+    const newNotif = { id: Date.now().toString(), type, text, habitInfo, read: false, timestamp: new Date().toISOString() };
+    const rivalNotifs = rivalData.notifications || [];
+    await saveDataToCloud({ notifications: [newNotif, ...rivalNotifs].slice(0, 20) }, rivalId);
+  };
+
+  const closeNotificationsAndMarkRead = async () => {
+    setShowNotifications(false);
+    const hasUnread = notifications.some(n => !n.read);
+    if (hasUnread) {
+      const updated = notifications.map(n => ({ ...n, read: true }));
+      await saveDataToCloud({ notifications: updated });
+    }
+  };
+
+  // ZMIENIONO LOGIKĘ: Akceptacja oznacza tylko zatwierdzenie celowości nawyku rywala
+  const acceptHabitFromNotif = async (habitInfo, notifId) => {
+    const updatedNotifs = notifications.map(n => n.id === notifId ? { ...n, read: true, accepted: true } : n);
+    await saveDataToCloud({ notifications: updatedNotifs });
+    notifyRival('INFO', `Zatwierdził(a) Twój nowy cel: ${habitInfo.name} - powodzenia!`);
+  };
+
+  const handleSetReady = async () => {
+    if (rivalData?.isReady) {
+      const newSprintRewards = { ...rewards, sprintActive: true, sprintStart: weekDays[6].fullDate };
+      const resetHistory = {};
+      
+      await saveDataToCloud({ isReady: false, rewards: newSprintRewards, history: resetHistory });
+      
+      const mirroredRewards = { ...newSprintRewards, myWins: newSprintRewards.rivalWins, rivalWins: newSprintRewards.myWins };
+      await saveDataToCloud({ isReady: false, rewards: mirroredRewards, history: resetHistory }, rivalId);
+      
+      notifyRival('INFO', 'Rozpoczął/ęła nasz nowy sprint! Zaczynamy!');
+    } else {
+      await saveDataToCloud({ isReady: true });
+      notifyRival('INFO', 'Zgłosił(a) gotowość do rozpoczęcia sprintu!');
+    }
   };
 
   const calculateSprintDay = () => {
@@ -163,9 +214,7 @@ export default function Home() {
   };
 
   const saveRewards = async () => {
-    const updatedRewards = { 
-      ...rewards, stake: editStake, seasonPrize: editSeasonPrize, pool: rewardPool
-    };
+    const updatedRewards = { ...rewards, stake: editStake, seasonPrize: editSeasonPrize, pool: rewardPool };
     setRewards(updatedRewards);
     await saveDataToCloud({ rewards: updatedRewards });
     if (rivalId) {
@@ -232,16 +281,16 @@ export default function Home() {
 
     const resetHistory = {}; 
     const newSprintRewards = {
-      ...rewards, sprintStart: weekDays[6].fullDate, 
+      ...rewards, 
+      sprintActive: false, 
       stake: rewards.stake === RANDOM_STAKE ? RANDOM_STAKE : finalDrawItem || rewards.stake,
       myWins: newMyWins, rivalWins: newRivalWins, pool: rewardPool
     };
-    setRewards(newSprintRewards);
-    setHistory(resetHistory);
-    await saveDataToCloud({ rewards: newSprintRewards, history: resetHistory });
+    
+    await saveDataToCloud({ isReady: false, rewards: newSprintRewards, history: resetHistory });
     if (rivalId) {
       const mirroredRewards = { ...newSprintRewards, myWins: newRivalWins, rivalWins: newMyWins };
-      await saveDataToCloud({ rewards: mirroredRewards, history: resetHistory }, rivalId);
+      await saveDataToCloud({ isReady: false, rewards: mirroredRewards, history: resetHistory }, rivalId);
     }
     setShowEndModal(false);
   };
@@ -266,14 +315,14 @@ export default function Home() {
     if (!newHabitName.trim()) return;
     const newHabit = { id: Date.now().toString(), name: newHabitName, type: newHabitType, target: newHabitType === 'weekly' ? Number(newHabitTarget) : 7 };
     const updatedHabits = [...habits, newHabit];
-    setHabits(updatedHabits);
     saveDataToCloud({ habits: updatedHabits });
+    // ZMIANA TREŚCI POWIADOMIENIA
+    notifyRival('NEW_HABIT', `Dodał(a) nowy cel do weryfikacji: ${newHabit.name}`, newHabit);
     setNewHabitName('');
   };
 
   const removeHabit = (idToRemove) => {
     const updatedHabits = habits.filter(h => h.id !== idToRemove);
-    setHabits(updatedHabits);
     saveDataToCloud({ habits: updatedHabits });
   };
 
@@ -282,9 +331,14 @@ export default function Home() {
     const activeDateString = activeDay.fullDate;
     const currentDayData = history[activeDateString] || {};
     const isDone = currentDayData[habitId] || false;
+    
     const newHistory = { ...history, [activeDateString]: { ...currentDayData, [habitId]: !isDone } };
-    setHistory(newHistory);
     saveDataToCloud({ history: newHistory });
+    
+    if (!isDone && activeDay.isToday) {
+      const habitObj = habits.find(h => h.id === habitId);
+      if (habitObj) notifyRival('INFO', `Świetnie! Właśnie odhaczył(a) zadanie: ${habitObj.name}`);
+    }
   };
 
   const handleLogin = async () => { try { await signInWithPopup(auth, provider); } catch (e) {} };
@@ -305,6 +359,7 @@ export default function Home() {
   }
 
   const rivalName = rivalData?.displayName || 'Rywal';
+  const unreadCount = notifications.filter(n => !n.read).length;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-violet-600 via-fuchsia-600 to-orange-500 text-white font-sans relative overflow-x-hidden">
@@ -312,17 +367,27 @@ export default function Home() {
       {/* ----------------- GŁÓWNY EKRAN APLIKACJI ----------------- */}
       <div className="p-6 pb-24">
         
-        {/* NAGŁÓWEK */}
+        {/* NAGŁÓWEK Z DZWONKIEM I ZĘBATKĄ */}
         <header className="mb-6 flex justify-between items-center">
           <div>
             <h1 className="text-3xl font-black tracking-tight drop-shadow-md">Cześć, {user.displayName?.split(' ')[0]}!</h1>
             <p className="text-white/80 text-sm mt-1 font-semibold bg-black/20 inline-block px-3 py-1 rounded-full backdrop-blur-sm border border-white/10">
-              Sprint: <span className={currentSprintDay > 14 ? "text-yellow-300 font-black" : "text-white"}>Dzień {currentSprintDay} z 14</span>
+              {rewards.sprintActive ? (
+                 <>Sprint: <span className={currentSprintDay > 14 ? "text-yellow-300 font-black" : "text-white"}>Dzień {currentSprintDay} z 14</span></>
+              ) : (
+                 <span className="text-yellow-300 font-black">Poczekalnia</span>
+              )}
             </p>
           </div>
-          <button onClick={() => setShowSettings(true)} className="w-12 h-12 bg-white/20 rounded-full shadow-lg border border-white/30 flex items-center justify-center text-2xl backdrop-blur-md hover:bg-white/30 transition-all active:scale-90">
-            ⚙️
-          </button>
+          <div className="flex gap-3">
+            <button onClick={() => setShowNotifications(true)} className="relative w-12 h-12 bg-white/20 rounded-full shadow-lg border border-white/30 flex items-center justify-center text-xl backdrop-blur-md hover:bg-white/30 transition-all active:scale-90">
+              🔔
+              {unreadCount > 0 && <span className="absolute top-0 right-0 w-4 h-4 bg-red-500 rounded-full border-2 border-fuchsia-600 shadow-md"></span>}
+            </button>
+            <button onClick={() => setShowSettings(true)} className="w-12 h-12 bg-white/20 rounded-full shadow-lg border border-white/30 flex items-center justify-center text-2xl backdrop-blur-md hover:bg-white/30 transition-all active:scale-90">
+              ⚙️
+            </button>
+          </div>
         </header>
 
         {/* INFO O STAWCE */}
@@ -333,121 +398,199 @@ export default function Home() {
           </span>
         </div>
 
-        {/* BANER PRZYPOMINAJĄCY O KOŃCU SPRINTU */}
-        {currentSprintDay > 14 && (
-          <div onClick={triggerEndSprintFlow} className="mb-8 bg-gradient-to-r from-yellow-400 to-orange-500 text-black p-5 rounded-3xl shadow-2xl cursor-pointer text-center animate-bounce hover:scale-[1.02] transition-transform">
-            <p className="font-black text-xl uppercase tracking-widest">Koniec czasu!</p>
-            <p className="text-sm font-bold mt-1 opacity-80">Kliknij, aby rozstrzygnąć sprint</p>
-          </div>
-        )}
-
-        {/* PASEK POSTĘPU (Scoreboard) */}
-        <div className="bg-white/95 backdrop-blur-xl p-5 rounded-3xl shadow-2xl mb-8 border border-white/50 text-gray-900 relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-violet-500 to-orange-500"></div>
-          <div className="flex justify-between text-base mb-4 font-black items-center">
-            <span className={myTotalPoints >= rivalTotalPoints ? 'text-violet-600 text-lg' : 'text-gray-400'}>Ty: {myTotalPoints}</span>
-            <span className={rivalTotalPoints >= myTotalPoints ? 'text-orange-500 text-lg' : 'text-gray-400'}>{rivalName}: {rivalTotalPoints}</span>
-          </div>
-          <div className="w-full bg-gray-200 rounded-full h-4 shadow-inner">
-            <div className="bg-gradient-to-r from-violet-500 to-orange-500 h-4 rounded-full transition-all duration-1000 shadow-md" style={{ width: `${myPercentage}%` }}></div>
-          </div>
-        </div>
-
-        {/* KALENDARZ */}
-        <div className="flex justify-between items-center mb-8 bg-black/20 p-2 rounded-3xl shadow-inner backdrop-blur-sm border border-white/10">
-          {weekDays.map((day) => (
-            <div key={day.id} onClick={() => setActiveDayIndex(day.id)} className={`flex flex-col items-center justify-center w-11 h-16 rounded-2xl cursor-pointer transition-all ${activeDayIndex === day.id ? 'bg-white text-violet-600 shadow-lg scale-110' : 'text-white/60 hover:bg-white/10'}`}>
-              <span className="text-[10px] font-black uppercase tracking-widest mb-1">{day.name}</span>
-              <span className={`text-base font-black ${activeDayIndex === day.id ? 'text-violet-600' : 'text-white'}`}>{day.date}</span>
-              {day.isToday && activeDayIndex !== day.id && <div className="w-1.5 h-1.5 bg-orange-400 rounded-full mt-1 shadow-[0_0_8px_rgba(251,146,60,0.8)]"></div>}
-            </div>
-          ))}
-        </div>
-
-        {/* TWOJE DYNAMICZNE NAWYKI */}
-        <div className="space-y-4">
-          <div className="flex justify-between items-end mb-3 px-2">
-            <h2 className="text-xl font-black drop-shadow-md">{activeDay.isToday ? 'Twoje cele na dziś' : `Historia: ${activeDay.name}, ${activeDay.date}`}</h2>
-            {isLocked && <span className="text-xs font-black text-white/90 flex gap-1 bg-black/40 px-3 py-1 rounded-full backdrop-blur-sm border border-white/20">🔒 ODCZYT</span>}
-          </div>
-
-          {habits.length === 0 ? (
-            <div className="text-center p-8 bg-black/20 backdrop-blur-sm rounded-3xl border border-white/20 shadow-lg">
-              <p className="text-sm font-semibold mb-3 text-white/80">Jeszcze nic tu nie ma.</p>
-              <button onClick={() => { setShowSettings(true); setActiveSettingsTab('habits'); }} className="bg-white text-violet-600 px-6 py-2 rounded-full font-black text-sm hover:scale-105 transition-transform shadow-lg">Dodaj pierwszy nawyk</button>
-            </div>
-          ) : (
-            <div className={`transition-opacity duration-300 ${isLocked ? 'opacity-70' : 'opacity-100'}`}>
-              {habits.map(habit => {
-                const currentDayData = history[activeDay.fullDate] || {};
-                const isDone = currentDayData[habit.id] || false;
-                let weeklyCount = 0;
-                if (habit.type === 'weekly') {
-                  weekDays.forEach(day => { if (history[day.fullDate] && history[day.fullDate][habit.id]) weeklyCount++; });
-                }
-                return (
-                  <div key={habit.id} className="flex items-center justify-between bg-white/95 p-5 rounded-3xl shadow-xl mb-4 active:scale-[0.98] transition-transform border border-white/50 text-gray-900 relative overflow-hidden">
-                    {isDone && <div className="absolute inset-0 bg-green-50/50"></div>}
-                    <div className="relative z-10">
-                      <p className={`font-black text-lg ${isDone ? 'line-through text-gray-400' : 'text-gray-900'}`}>{habit.name}</p>
-                      <p className={`text-xs mt-1 font-bold ${habit.type === 'weekly' && weeklyCount >= habit.target ? 'text-green-500' : 'text-gray-500'}`}>
-                        {habit.type === 'daily' ? 'Codziennie' : (weeklyCount >= habit.target ? 'Ukończono na ten tydzień! 🎉' : `${weeklyCount} / ${habit.target} w tym tygodniu`)}
-                      </p>
-                    </div>
-                    <div onClick={() => toggleHabit(habit.id)} className={`relative z-10 w-10 h-10 rounded-full border-4 flex items-center justify-center transition-all shadow-md ${isDone ? (isLocked ? 'bg-gray-400 border-gray-400' : 'bg-green-500 border-green-500 scale-110') : 'border-gray-200 bg-gray-50'} ${isLocked ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
-                      {isDone && <span className="text-white text-xl font-black">✓</span>}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* ----------------- PODGLĄD NAWYKÓW RYWALA (Wyszarzone/Półprzezroczyste) ----------------- */}
-        {rivalId && rivalData && (
-          <div className="mt-8">
-            <button 
-              onClick={() => setShowRivalHabits(!showRivalHabits)} 
-              className="w-full text-center text-white/80 hover:text-white font-black text-sm uppercase tracking-widest py-3 border-t border-white/20 transition-colors"
-            >
-              {showRivalHabits ? '▲ Ukryj nawyki rywala ▲' : '▼ Podglądaj nawyki rywala ▼'}
-            </button>
+        {/* --- POCZEKALNIA (JEŚLI SPRINT NIE JEST AKTYWNY) --- */}
+        {!rewards.sprintActive ? (
+          <div className="bg-white/95 backdrop-blur-xl p-6 rounded-3xl shadow-2xl mb-8 border border-white/50 text-center text-gray-900">
+            <h2 className="text-2xl font-black mb-2">Gotowi do startu? 🚀</h2>
+            <p className="text-gray-500 text-sm mb-6 font-medium">Aby rozpocząć odliczanie 14 dni, obie osoby muszą zgłosić gotowość.</p>
             
-            {showRivalHabits && rivalData.habits && (
-              <div className="mt-4 space-y-3 opacity-60 grayscale-[40%] pointer-events-none transition-all duration-500">
-                <p className="text-center text-xs font-bold text-white/70 uppercase mb-2">Ekran {rivalName}</p>
-                {rivalData.habits.length === 0 ? (
-                  <p className="text-center text-sm italic text-white/50">{rivalName} nie ma jeszcze nawyków.</p>
-                ) : (
-                  rivalData.habits.map(habit => {
-                    const rivalDayData = (rivalData.history && rivalData.history[activeDay.fullDate]) || {};
-                    const isDone = rivalDayData[habit.id] || false;
-                    let weeklyCount = 0;
-                    if (habit.type === 'weekly') {
-                      weekDays.forEach(day => { if (rivalData.history && rivalData.history[day.fullDate] && rivalData.history[day.fullDate][habit.id]) weeklyCount++; });
-                    }
-                    return (
-                      <div key={habit.id} className="flex items-center justify-between bg-white/40 p-4 rounded-2xl shadow-sm border border-white/10 text-gray-800">
-                        <div>
-                          <p className={`font-bold text-base ${isDone ? 'line-through text-gray-500' : 'text-gray-800'}`}>{habit.name}</p>
-                          <p className="text-[10px] mt-0.5 font-bold text-gray-600">
-                            {habit.type === 'daily' ? 'Codziennie' : `${weeklyCount} / ${habit.target} w tyg`}
-                          </p>
-                        </div>
-                        <div className={`w-8 h-8 rounded-full border-2 flex items-center justify-center ${isDone ? 'bg-gray-600 border-gray-600' : 'border-gray-400 bg-transparent'}`}>
-                          {isDone && <span className="text-white text-sm font-bold">✓</span>}
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
+            {!rivalId ? (
+              <button onClick={() => { setShowSettings(true); setActiveSettingsTab('rival'); }} className="bg-gradient-to-r from-violet-600 to-orange-500 text-white px-6 py-3 rounded-xl font-black text-sm hover:scale-105 transition-transform shadow-lg">
+                Najpierw połącz się z rywalem!
+              </button>
+            ) : (
+              <div className="flex justify-between items-center bg-gray-50 p-4 rounded-2xl border border-gray-100">
+                <div className="flex flex-col items-center flex-1">
+                  <span className="text-xs font-black text-gray-400 uppercase tracking-widest mb-3">Ty</span>
+                  {isReady ? (
+                    <span className="text-green-500 font-black text-lg">✓ Gotowy</span>
+                  ) : (
+                    <button onClick={handleSetReady} className="bg-violet-600 text-white px-4 py-2 rounded-xl font-black shadow-lg hover:bg-violet-700 active:scale-95 transition-all">Zgłoś gotowość</button>
+                  )}
+                </div>
+                <div className="w-px h-16 bg-gray-200 mx-2"></div>
+                <div className="flex flex-col items-center flex-1">
+                  <span className="text-xs font-black text-gray-400 uppercase tracking-widest mb-3">{rivalName}</span>
+                  {rivalData?.isReady ? (
+                    <span className="text-green-500 font-black text-lg">✓ Gotowy</span>
+                  ) : (
+                    <span className="text-gray-400 font-bold mt-2 animate-pulse">Czeka...</span>
+                  )}
+                </div>
               </div>
             )}
           </div>
-        )}
+        ) : (
+          /* --- WŁAŚCIWY SPRINT UI (Gdy oboje zaakceptowali) --- */
+          <>
+            {currentSprintDay > 14 && (
+              <div onClick={triggerEndSprintFlow} className="mb-8 bg-gradient-to-r from-yellow-400 to-orange-500 text-black p-5 rounded-3xl shadow-2xl cursor-pointer text-center animate-bounce hover:scale-[1.02] transition-transform">
+                <p className="font-black text-xl uppercase tracking-widest">Koniec czasu!</p>
+                <p className="text-sm font-bold mt-1 opacity-80">Kliknij, aby rozstrzygnąć sprint</p>
+              </div>
+            )}
 
+            <div className="bg-white/95 backdrop-blur-xl p-5 rounded-3xl shadow-2xl mb-8 border border-white/50 text-gray-900 relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-violet-500 to-orange-500"></div>
+              <div className="flex justify-between text-base mb-4 font-black items-center">
+                <span className={myTotalPoints >= rivalTotalPoints ? 'text-violet-600 text-lg' : 'text-gray-400'}>Ty: {myTotalPoints}</span>
+                <span className={rivalTotalPoints >= myTotalPoints ? 'text-orange-500 text-lg' : 'text-gray-400'}>{rivalName}: {rivalTotalPoints}</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-4 shadow-inner">
+                <div className="bg-gradient-to-r from-violet-500 to-orange-500 h-4 rounded-full transition-all duration-1000 shadow-md" style={{ width: `${myPercentage}%` }}></div>
+              </div>
+            </div>
+
+            <div className="flex justify-between items-center mb-8 bg-black/20 p-2 rounded-3xl shadow-inner backdrop-blur-sm border border-white/10">
+              {weekDays.map((day) => (
+                <div key={day.id} onClick={() => setActiveDayIndex(day.id)} className={`flex flex-col items-center justify-center w-11 h-16 rounded-2xl cursor-pointer transition-all ${activeDayIndex === day.id ? 'bg-white text-violet-600 shadow-lg scale-110' : 'text-white/60 hover:bg-white/10'}`}>
+                  <span className="text-[10px] font-black uppercase tracking-widest mb-1">{day.name}</span>
+                  <span className={`text-base font-black ${activeDayIndex === day.id ? 'text-violet-600' : 'text-white'}`}>{day.date}</span>
+                  {day.isToday && activeDayIndex !== day.id && <div className="w-1.5 h-1.5 bg-orange-400 rounded-full mt-1 shadow-[0_0_8px_rgba(251,146,60,0.8)]"></div>}
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-4">
+              <div className="flex justify-between items-end mb-3 px-2">
+                <h2 className="text-xl font-black drop-shadow-md">{activeDay.isToday ? 'Twoje cele na dziś' : `Historia: ${activeDay.name}, ${activeDay.date}`}</h2>
+                {isLocked && <span className="text-xs font-black text-white/90 flex gap-1 bg-black/40 px-3 py-1 rounded-full backdrop-blur-sm border border-white/20">🔒 ODCZYT</span>}
+              </div>
+
+              {habits.length === 0 ? (
+                <div className="text-center p-8 bg-black/20 backdrop-blur-sm rounded-3xl border border-white/20 shadow-lg">
+                  <p className="text-sm font-semibold mb-3 text-white/80">Jeszcze nic tu nie ma.</p>
+                  <button onClick={() => { setShowSettings(true); setActiveSettingsTab('habits'); }} className="bg-white text-violet-600 px-6 py-2 rounded-full font-black text-sm hover:scale-105 transition-transform shadow-lg">Dodaj pierwszy nawyk</button>
+                </div>
+              ) : (
+                <div className={`transition-opacity duration-300 ${isLocked ? 'opacity-70' : 'opacity-100'}`}>
+                  {habits.map(habit => {
+                    const currentDayData = history[activeDay.fullDate] || {};
+                    const isDone = currentDayData[habit.id] || false;
+                    let weeklyCount = 0;
+                    if (habit.type === 'weekly') {
+                      weekDays.forEach(day => { if (history[day.fullDate] && history[day.fullDate][habit.id]) weeklyCount++; });
+                    }
+                    return (
+                      <div key={habit.id} className="flex items-center justify-between bg-white/95 p-5 rounded-3xl shadow-xl mb-4 active:scale-[0.98] transition-transform border border-white/50 text-gray-900 relative overflow-hidden">
+                        {isDone && <div className="absolute inset-0 bg-green-50/50"></div>}
+                        <div className="relative z-10">
+                          <p className={`font-black text-lg ${isDone ? 'line-through text-gray-400' : 'text-gray-900'}`}>{habit.name}</p>
+                          <p className={`text-xs mt-1 font-bold ${habit.type === 'weekly' && weeklyCount >= habit.target ? 'text-green-500' : 'text-gray-500'}`}>
+                            {habit.type === 'daily' ? 'Codziennie' : (weeklyCount >= habit.target ? 'Ukończono na ten tydzień! 🎉' : `${weeklyCount} / ${habit.target} w tym tygodniu`)}
+                          </p>
+                        </div>
+                        <div onClick={() => toggleHabit(habit.id)} className={`relative z-10 w-10 h-10 rounded-full border-4 flex items-center justify-center transition-all shadow-md ${isDone ? (isLocked ? 'bg-gray-400 border-gray-400' : 'bg-green-500 border-green-500 scale-110') : 'border-gray-200 bg-gray-50'} ${isLocked ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
+                          {isDone && <span className="text-white text-xl font-black">✓</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* PODGLĄD NAWYKÓW RYWALA */}
+            {rivalId && rivalData && (
+              <div className="mt-8">
+                <button 
+                  onClick={() => setShowRivalHabits(!showRivalHabits)} 
+                  className="w-full text-center text-white/80 hover:text-white font-black text-sm uppercase tracking-widest py-3 border-t border-white/20 transition-colors"
+                >
+                  {showRivalHabits ? '▲ Ukryj nawyki rywala ▲' : '▼ Podglądaj nawyki rywala ▼'}
+                </button>
+                
+                {showRivalHabits && rivalData.habits && (
+                  <div className="mt-4 space-y-3 opacity-60 grayscale-[40%] pointer-events-none transition-all duration-500">
+                    <p className="text-center text-xs font-bold text-white/70 uppercase mb-2">Ekran {rivalName}</p>
+                    {rivalData.habits.length === 0 ? (
+                      <p className="text-center text-sm italic text-white/50">{rivalName} nie ma jeszcze nawyków.</p>
+                    ) : (
+                      rivalData.habits.map(habit => {
+                        const rivalDayData = (rivalData.history && rivalData.history[activeDay.fullDate]) || {};
+                        const isDone = rivalDayData[habit.id] || false;
+                        let weeklyCount = 0;
+                        if (habit.type === 'weekly') {
+                          weekDays.forEach(day => { if (rivalData.history && rivalData.history[day.fullDate] && rivalData.history[day.fullDate][habit.id]) weeklyCount++; });
+                        }
+                        return (
+                          <div key={habit.id} className="flex items-center justify-between bg-white/40 p-4 rounded-2xl shadow-sm border border-white/10 text-gray-800">
+                            <div>
+                              <p className={`font-bold text-base ${isDone ? 'line-through text-gray-500' : 'text-gray-800'}`}>{habit.name}</p>
+                              <p className="text-[10px] mt-0.5 font-bold text-gray-600">
+                                {habit.type === 'daily' ? 'Codziennie' : `${weeklyCount} / ${habit.target} w tyg`}
+                              </p>
+                            </div>
+                            <div className={`w-8 h-8 rounded-full border-2 flex items-center justify-center ${isDone ? 'bg-gray-600 border-gray-600' : 'border-gray-400 bg-transparent'}`}>
+                              {isDone && <span className="text-white text-sm font-bold">✓</span>}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
       </div>
+
+      {/* ----------------- MODAL POWIADOMIEŃ (DZWONEK) ----------------- */}
+      {showNotifications && (
+        <div className="fixed inset-0 bg-gray-50 text-gray-900 z-50 overflow-y-auto font-sans animate-fade-in">
+          <div className="p-6 pb-20">
+            <header className="flex justify-between items-center mb-8 border-b border-gray-200 pb-4">
+              <h2 className="text-3xl font-black tracking-tight">Aktywność</h2>
+              <button onClick={closeNotificationsAndMarkRead} className="text-gray-500 font-black bg-gray-200 w-10 h-10 rounded-full flex items-center justify-center hover:bg-gray-300 transition-colors">
+                ✕
+              </button>
+            </header>
+            
+            <div className="space-y-4">
+              {notifications.length === 0 ? (
+                <div className="text-center p-8 bg-white rounded-3xl border border-gray-100 shadow-sm">
+                  <p className="text-5xl mb-4">📭</p>
+                  <p className="text-gray-500 font-bold">Brak nowych powiadomień.</p>
+                  <p className="text-sm text-gray-400 mt-2">Gdy {rivalName} coś zrobi, pojawi się to tutaj.</p>
+                </div>
+              ) : (
+                notifications.map(notif => (
+                  <div key={notif.id} className={`p-5 rounded-3xl border ${notif.read ? 'bg-gray-50 border-gray-100' : 'bg-white border-violet-200 shadow-md'}`}>
+                    <div className="flex gap-4 items-start">
+                      <div className="text-2xl mt-1">{notif.type === 'NEW_HABIT' ? '🎯' : notif.type === 'INFO' ? '⚡' : '🔥'}</div>
+                      <div className="flex-1">
+                        <p className="font-bold text-gray-900 mb-1">{notif.text}</p>
+                        <p className="text-xs text-gray-400 font-medium">Od: {rivalName}</p>
+                        
+                        {/* PRZYCISK DO AKCEPTACJI CELOWOŚCI NAWYKU */}
+                        {notif.type === 'NEW_HABIT' && notif.habitInfo && !notif.accepted && (
+                          <button onClick={() => acceptHabitFromNotif(notif.habitInfo, notif.id)} className="mt-3 bg-green-100 text-green-700 px-4 py-3 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-green-200 transition-colors w-full border border-green-200 shadow-sm active:scale-95">
+                            ✓ Akceptuję ten cel (ma sens)
+                          </button>
+                        )}
+                        {notif.accepted && (
+                          <p className="mt-3 text-xs font-bold text-green-500 uppercase tracking-wider">✓ Zaakceptowano i wysłano potwierdzenie</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ----------------- MODAL USTAWIEŃ ----------------- */}
       {showSettings && (
@@ -460,7 +603,6 @@ export default function Home() {
               </button>
             </header>
 
-            {/* GŁÓWNE MENU USTAWIEŃ */}
             {activeSettingsTab === null && (
               <div className="space-y-4">
                 <button onClick={() => setActiveSettingsTab('habits')} className="w-full bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex justify-between items-center hover:bg-gray-50 hover:scale-[1.02] transition-all text-left">
@@ -470,15 +612,13 @@ export default function Home() {
                   </div>
                   <span className="text-gray-300 text-2xl font-black">➔</span>
                 </button>
-                
                 <button onClick={() => setActiveSettingsTab('rival')} className="w-full bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex justify-between items-center hover:bg-gray-50 hover:scale-[1.02] transition-all text-left">
                   <div>
                     <p className="font-black text-xl text-blue-500">🤝 Twój Rywal</p>
-                    <p className="text-sm text-gray-500 mt-1 font-medium">Parowanie i statystyki rywala</p>
+                    <p className="text-sm text-gray-500 mt-1 font-medium">Parowanie i statystyki</p>
                   </div>
                   <span className="text-gray-300 text-2xl font-black">➔</span>
                 </button>
-
                 <button onClick={() => setActiveSettingsTab('rewards')} className="w-full bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex justify-between items-center hover:bg-gray-50 hover:scale-[1.02] transition-all text-left">
                   <div>
                     <p className="font-black text-xl text-orange-500">🏆 Stawki i Nagrody</p>
@@ -486,14 +626,12 @@ export default function Home() {
                   </div>
                   <span className="text-gray-300 text-2xl font-black">➔</span>
                 </button>
-
                 <button onClick={() => signOut(auth)} className="w-full border-2 border-gray-200 text-gray-500 font-black py-4 rounded-2xl mt-12 hover:bg-gray-100 transition-colors uppercase tracking-widest text-sm">
                   Wyloguj się
                 </button>
               </div>
             )}
 
-            {/* POD-MENU: NAWYKI */}
             {activeSettingsTab === 'habits' && (
               <section className="animate-fade-in">
                 <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
@@ -505,7 +643,7 @@ export default function Home() {
                     </select>
                     {newHabitType === 'weekly' && <input type="number" min="1" max="6" className="border-2 border-gray-100 p-4 rounded-xl w-24 bg-gray-50 text-center focus:border-violet-500 outline-none" value={newHabitTarget} onChange={e => setNewHabitTarget(e.target.value)} />}
                   </div>
-                  <button onClick={addHabit} className="w-full bg-violet-600 text-white py-4 rounded-xl font-black text-base hover:bg-violet-700 transition-colors shadow-lg shadow-violet-200">DODAJ DO LISTY</button>
+                  <button onClick={addHabit} className="w-full bg-violet-600 text-white py-4 rounded-xl font-black text-base hover:bg-violet-700 transition-colors shadow-lg shadow-violet-200">WYŚLIJ CEL DO AKCEPTACJI</button>
                   
                   {habits.length > 0 && (
                     <div className="mt-8 pt-6 border-t-2 border-gray-50">
@@ -522,7 +660,6 @@ export default function Home() {
               </section>
             )}
 
-            {/* POD-MENU: RYWAL */}
             {activeSettingsTab === 'rival' && (
               <section className="animate-fade-in">
                 <div className="bg-white p-8 rounded-3xl shadow-sm border border-gray-100 text-center">
@@ -547,7 +684,6 @@ export default function Home() {
               </section>
             )}
 
-            {/* POD-MENU: NAGRODY */}
             {activeSettingsTab === 'rewards' && (
               <section className="animate-fade-in">
                 <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
@@ -556,9 +692,11 @@ export default function Home() {
                       <p className="text-xs text-orange-600 font-black uppercase tracking-widest mb-1">Tabela Sezonu</p>
                       <p className="text-lg font-black text-gray-900">Ty: {rewards.myWins} <span className="text-gray-300 mx-2">|</span> {rivalName}: {rewards.rivalWins}</p>
                     </div>
-                    <button onClick={triggerEndSprintFlow} className="bg-orange-500 text-white px-5 py-3 rounded-xl text-sm font-black shadow-lg shadow-orange-200 hover:scale-105 transition-transform active:scale-95">
-                      Finał Sprintu!
-                    </button>
+                    {rewards.sprintActive && (
+                      <button onClick={triggerEndSprintFlow} className="bg-orange-500 text-white px-5 py-3 rounded-xl text-sm font-black shadow-lg shadow-orange-200 hover:scale-105 transition-transform active:scale-95">
+                        Finał Sprintu!
+                      </button>
+                    )}
                   </div>
 
                   <div className="mb-8">
@@ -647,7 +785,7 @@ export default function Home() {
 
             {(rewards.stake !== RANDOM_STAKE || finalDrawItem) && (
               <button onClick={finalizeSprint} className="w-full bg-black text-white py-5 rounded-2xl font-black uppercase tracking-widest shadow-xl hover:bg-gray-800 transition-colors active:scale-95 text-sm">
-                Zakończ i rozdaj punkty
+                Zakończ i wróć do poczekalni
               </button>
             )}
 
