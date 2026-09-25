@@ -26,6 +26,18 @@ const getLast7Days = () => {
   return days;
 };
 
+// NOWOŚĆ: Funkcja generująca 14 dat obecnego sprintu do precyzyjnego liczenia punktów
+const getSprintDates = (startDateStr) => {
+  const dates = [];
+  const start = new Date(startDateStr);
+  for (let i = 0; i < 14; i++) {
+    const d = new Date(start);
+    d.setDate(d.getDate() + i);
+    dates.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+  }
+  return dates;
+};
+
 const RANDOM_STAKE = '🎲 Tajemnicze Losowanie';
 
 export default function Home() {
@@ -45,6 +57,7 @@ export default function Home() {
 
   // USER DATA & SYNC
   const [isReady, setIsReady] = useState(false);
+  const [isReadyToEnd, setIsReadyToEnd] = useState(false); 
   const [notifications, setNotifications] = useState([]);
   const [habits, setHabits] = useState([]); 
   const [history, setHistory] = useState({});
@@ -60,7 +73,7 @@ export default function Home() {
   // RIVAL DATA SYNC
   const [rivalData, setRivalData] = useState(null);
 
-  // META-GRA (SPRINTY I NAGRODY)
+  // META-GRA
   const defaultPool = [
     'Przegrany zaprasza do restauracji', 
     'Kawa i ciastko na następne spotkanie', 
@@ -70,13 +83,14 @@ export default function Home() {
     'Karny trening (pompki/przysiady)'
   ];
   const defaultRewards = {
-    sprintActive: false, 
+    seasonActive: false, // Oznacza, że sezon trwa (niezależnie od tego który to sprint)
     sprintStart: weekDays[6].fullDate,
     stake: RANDOM_STAKE,
     seasonPrize: 'Weekendowy wyjazd',
     myWins: 0,
     rivalWins: 0,
-    pool: defaultPool
+    pool: defaultPool,
+    drawnPrize: null 
   };
   const [rewards, setRewards] = useState(defaultRewards);
   
@@ -85,8 +99,9 @@ export default function Home() {
   const [rewardPool, setRewardPool] = useState(defaultPool);
   const [newRewardInput, setNewRewardInput] = useState('');
 
-  // END SPRINT ANIMATION
+  // END SPRINT ANIMATION & FREEZE
   const [showEndModal, setShowEndModal] = useState(false);
+  const [frozenPoints, setFrozenPoints] = useState(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentDrawItem, setCurrentDrawItem] = useState('');
   const [finalDrawItem, setFinalDrawItem] = useState('');
@@ -108,10 +123,11 @@ export default function Home() {
         setHistory(data.history || {});
         setRivalId(data.rivalId || null);
         setIsReady(data.isReady || false);
+        setIsReadyToEnd(data.isReadyToEnd || false);
         setNotifications(data.notifications || []);
         
         const loadedRewards = data.rewards || defaultRewards;
-        if (loadedRewards.sprintActive === undefined) loadedRewards.sprintActive = false;
+        if (loadedRewards.seasonActive === undefined) loadedRewards.seasonActive = false;
         
         setRewards(loadedRewards);
         setEditStake(loadedRewards.stake || defaultRewards.stake);
@@ -130,7 +146,7 @@ export default function Home() {
       } else {
         const newCode = user.uid.substring(0, 5).toUpperCase();
         const displayName = user.displayName?.split(' ')[0] || 'Gracz';
-        saveDataToCloud({ inviteCode: newCode, displayName, isReady: false, habits: [], history: {}, notifications: [], rewards: defaultRewards }, user.uid);
+        saveDataToCloud({ inviteCode: newCode, displayName, isReady: false, isReadyToEnd: false, habits: [], history: {}, notifications: [], rewards: defaultRewards }, user.uid);
       }
       setLoading(false);
     });
@@ -152,7 +168,6 @@ export default function Home() {
     await setDoc(docRef, newData, { merge: true });
   };
 
-  // SYSTEM POWIADOMIEŃ I AKCEPTACJI CELÓW
   const notifyRival = async (type, text, habitInfo = null) => {
     if (!rivalId || !rivalData) return;
     const newNotif = { id: Date.now().toString(), type, text, habitInfo, read: false, timestamp: new Date().toISOString() };
@@ -169,7 +184,6 @@ export default function Home() {
     }
   };
 
-  // ZMIENIONO LOGIKĘ: Akceptacja oznacza tylko zatwierdzenie celowości nawyku rywala
   const acceptHabitFromNotif = async (habitInfo, notifId) => {
     const updatedNotifs = notifications.map(n => n.id === notifId ? { ...n, read: true, accepted: true } : n);
     await saveDataToCloud({ notifications: updatedNotifs });
@@ -178,25 +192,30 @@ export default function Home() {
 
   const handleSetReady = async () => {
     if (rivalData?.isReady) {
-      const newSprintRewards = { ...rewards, sprintActive: true, sprintStart: weekDays[6].fullDate };
-      const resetHistory = {};
+      const today = new Date();
+      if (today.getHours() < 4) today.setDate(today.getDate() - 1);
+      const dateString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+
+      const newSprintRewards = { ...rewards, seasonActive: true, sprintStart: dateString, drawnPrize: null };
       
-      await saveDataToCloud({ isReady: false, rewards: newSprintRewards, history: resetHistory });
-      
+      await saveDataToCloud({ isReady: false, rewards: newSprintRewards });
       const mirroredRewards = { ...newSprintRewards, myWins: newSprintRewards.rivalWins, rivalWins: newSprintRewards.myWins };
-      await saveDataToCloud({ isReady: false, rewards: mirroredRewards, history: resetHistory }, rivalId);
+      await saveDataToCloud({ isReady: false, rewards: mirroredRewards }, rivalId);
       
-      notifyRival('INFO', 'Rozpoczął/ęła nasz nowy sprint! Zaczynamy!');
+      notifyRival('INFO', 'Rozpoczął/ęła nasz Sezon! Pierwszy sprint wystartował!');
     } else {
       await saveDataToCloud({ isReady: true });
-      notifyRival('INFO', 'Zgłosił(a) gotowość do rozpoczęcia sprintu!');
+      notifyRival('INFO', 'Zgłosił(a) gotowość do rozpoczęcia sezonu!');
     }
   };
 
   const calculateSprintDay = () => {
-    const start = new Date(rewards.sprintStart).getTime();
-    const now = new Date(weekDays[6].fullDate).getTime();
-    const diff = Math.floor((now - start) / (1000 * 60 * 60 * 24));
+    const start = new Date(rewards.sprintStart);
+    start.setHours(0,0,0,0);
+    const today = new Date();
+    if (today.getHours() < 4) today.setDate(today.getDate() - 1);
+    today.setHours(0,0,0,0);
+    const diff = Math.floor((today - start) / (1000 * 60 * 60 * 24));
     return diff >= 0 ? diff + 1 : 1;
   };
   const currentSprintDay = calculateSprintDay();
@@ -224,40 +243,72 @@ export default function Home() {
     setActiveSettingsTab(null);
   };
 
-  const calculatePoints = (habitsList, historyData) => {
-    if (!habitsList || !historyData) return 0;
+  const resetSeasonScore = async () => {
+    const confirmReset = window.confirm("Czy na pewno chcesz wyzerować wyniki całego sezonu? Obie osoby wrócą do stanu 0:0.");
+    if (!confirmReset) return;
+
+    const updatedRewards = { ...rewards, myWins: 0, rivalWins: 0 };
+    setRewards(updatedRewards);
+    await saveDataToCloud({ rewards: updatedRewards });
+    
+    if (rivalId) {
+      await saveDataToCloud({ rewards: updatedRewards }, rivalId);
+      notifyRival('INFO', 'Wyzerował(a) wyniki sezonu. Zaczynamy zabawę od zera!');
+    }
+  };
+
+  // NOWA LOGIKA LICZENIA PUNKTÓW: Zlicza TYLKO te dni, które należą do obecnego 14-dniowego okna sprintu
+  const calculatePoints = (habitsList, historyData, sprintStartStr) => {
+    if (!habitsList || !historyData || !sprintStartStr) return 0;
     let points = 0;
     let bonus = 0;
-    Object.values(historyData).forEach((day) => {
-      Object.keys(day).forEach(habitId => { if (day[habitId]) points += 1; });
+    const sprintDates = getSprintDates(sprintStartStr);
+
+    // Punkty za dni
+    sprintDates.forEach(dateStr => {
+      if (historyData[dateStr]) {
+        Object.keys(historyData[dateStr]).forEach(habitId => { if (historyData[dateStr][habitId]) points += 1; });
+      }
     });
+
+    // Punkty bonusowe za cele tygodniowe (sprawdzamy Tydzień 1 i Tydzień 2 bieżącego sprintu)
     habitsList.forEach(habit => {
       if (habit.type === 'weekly') {
-        let weeklyCount = 0;
-        weekDays.forEach(day => { if (historyData[day.fullDate] && historyData[day.fullDate][habit.id]) weeklyCount++; });
-        if (weeklyCount >= habit.target) bonus += 1;
+        let week1Count = 0;
+        let week2Count = 0;
+        for(let i=0; i<7; i++) { if (historyData[sprintDates[i]] && historyData[sprintDates[i]][habit.id]) week1Count++; }
+        for(let i=7; i<14; i++) { if (historyData[sprintDates[i]] && historyData[sprintDates[i]][habit.id]) week2Count++; }
+        if (week1Count >= habit.target) bonus += 1;
+        if (week2Count >= habit.target) bonus += 1;
       }
     });
     return points + bonus;
   };
 
-  const myTotalPoints = calculatePoints(habits, history);
-  const rivalTotalPoints = calculatePoints(rivalData?.habits, rivalData?.history);
+  const myTotalPoints = calculatePoints(habits, history, rewards.sprintStart);
+  const rivalTotalPoints = calculatePoints(rivalData?.habits, rivalData?.history, rivalData?.rewards?.sprintStart);
   const totalCombined = myTotalPoints + rivalTotalPoints;
   const myPercentage = totalCombined === 0 ? 50 : (myTotalPoints / totalCombined) * 100;
 
-  const triggerEndSprintFlow = () => {
-    const updatedRewards = { ...rewards, stake: editStake, seasonPrize: editSeasonPrize, pool: rewardPool };
-    setRewards(updatedRewards);
-    setShowSettings(false);
-    setActiveSettingsTab(null);
-    setFinalDrawItem('');
-    setCurrentDrawItem('');
-    setShowEndModal(true);
-  };
+  // LOGIKA OBOPÓLNEGO FINAŁU
+  const bothReadyToEnd = isReadyToEnd && rivalData?.isReadyToEnd;
 
-  const startRouletteAnimation = () => {
-    if (rewardPool.length === 0) return setFinalDrawItem("Brak nagród!");
+  // Zarządzanie otwarciem i mrożeniem punktów
+  useEffect(() => {
+    if (bothReadyToEnd && !showEndModal) {
+      setShowEndModal(true);
+      setFrozenPoints({ my: myTotalPoints, rival: rivalTotalPoints });
+    }
+  }, [bothReadyToEnd, showEndModal]);
+
+  // Synchronizacja kręcenia ruletką z bazy na żywo
+  useEffect(() => {
+    if (showEndModal && rewards.stake === RANDOM_STAKE && rewards.drawnPrize && !finalDrawItem && !isDrawing) {
+      startRouletteAnimation(rewards.drawnPrize);
+    }
+  }, [showEndModal, rewards.stake, rewards.drawnPrize, finalDrawItem, isDrawing]);
+
+  const startRouletteAnimation = (targetItem) => {
     setIsDrawing(true);
     let ticks = 0;
     const interval = setInterval(() => {
@@ -265,34 +316,55 @@ export default function Home() {
       ticks++;
       if (ticks >= 25) {
         clearInterval(interval);
-        const finalItem = rewardPool[Math.floor(Math.random() * rewardPool.length)];
-        setCurrentDrawItem(finalItem);
-        setFinalDrawItem(finalItem);
+        setCurrentDrawItem(targetItem);
+        setFinalDrawItem(targetItem);
         setIsDrawing(false);
       }
     }, 100);
   };
 
+  const handleDrawClick = async () => {
+    if (rewards.drawnPrize || isDrawing) return;
+    const picked = rewardPool[Math.floor(Math.random() * rewardPool.length)];
+    const updatedRewards = { ...rewards, drawnPrize: picked };
+    
+    await saveDataToCloud({ rewards: updatedRewards });
+    if (rivalId) {
+        const mirroredRewards = { ...updatedRewards, myWins: updatedRewards.rivalWins, rivalWins: updatedRewards.myWins };
+        await saveDataToCloud({ rewards: mirroredRewards }, rivalId);
+    }
+  };
+
   const finalizeSprint = async () => {
     let newMyWins = rewards.myWins;
     let newRivalWins = rewards.rivalWins;
-    if (myTotalPoints > rivalTotalPoints) newMyWins += 1;
-    else if (rivalTotalPoints > myTotalPoints) newRivalWins += 1;
+    
+    const myPts = frozenPoints ? frozenPoints.my : myTotalPoints;
+    const rivalPts = frozenPoints ? frozenPoints.rival : rivalTotalPoints;
 
-    const resetHistory = {}; 
+    if (myPts > rivalPts) newMyWins += 1;
+    else if (rivalPts > myPts) newRivalWins += 1;
+
+    // Przesuwamy okno startu sprintu o 14 dni do przodu
+    const d = new Date(rewards.sprintStart);
+    d.setDate(d.getDate() + 14);
+    const newStartStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
     const newSprintRewards = {
       ...rewards, 
-      sprintActive: false, 
-      stake: rewards.stake === RANDOM_STAKE ? RANDOM_STAKE : finalDrawItem || rewards.stake,
-      myWins: newMyWins, rivalWins: newRivalWins, pool: rewardPool
+      sprintStart: newStartStr, // Płynne wejście w nowy sprint!
+      drawnPrize: null,
+      myWins: newMyWins, 
+      rivalWins: newRivalWins
     };
     
-    await saveDataToCloud({ isReady: false, rewards: newSprintRewards, history: resetHistory });
-    if (rivalId) {
-      const mirroredRewards = { ...newSprintRewards, myWins: newRivalWins, rivalWins: newMyWins };
-      await saveDataToCloud({ isReady: false, rewards: mirroredRewards, history: resetHistory }, rivalId);
-    }
+    // Zamykamy lokalnie żeby zapobiec migotaniu
+    setIsReadyToEnd(false);
     setShowEndModal(false);
+    setFrozenPoints(null);
+    setFinalDrawItem('');
+
+    await saveDataToCloud({ isReadyToEnd: false, rewards: newSprintRewards });
   };
 
   const connectToRival = async () => {
@@ -316,7 +388,6 @@ export default function Home() {
     const newHabit = { id: Date.now().toString(), name: newHabitName, type: newHabitType, target: newHabitType === 'weekly' ? Number(newHabitTarget) : 7 };
     const updatedHabits = [...habits, newHabit];
     saveDataToCloud({ habits: updatedHabits });
-    // ZMIANA TREŚCI POWIADOMIENIA
     notifyRival('NEW_HABIT', `Dodał(a) nowy cel do weryfikacji: ${newHabit.name}`, newHabit);
     setNewHabitName('');
   };
@@ -367,15 +438,15 @@ export default function Home() {
       {/* ----------------- GŁÓWNY EKRAN APLIKACJI ----------------- */}
       <div className="p-6 pb-24">
         
-        {/* NAGŁÓWEK Z DZWONKIEM I ZĘBATKĄ */}
+        {/* NAGŁÓWEK */}
         <header className="mb-6 flex justify-between items-center">
           <div>
             <h1 className="text-3xl font-black tracking-tight drop-shadow-md">Cześć, {user.displayName?.split(' ')[0]}!</h1>
             <p className="text-white/80 text-sm mt-1 font-semibold bg-black/20 inline-block px-3 py-1 rounded-full backdrop-blur-sm border border-white/10">
-              {rewards.sprintActive ? (
+              {rewards.seasonActive ? (
                  <>Sprint: <span className={currentSprintDay > 14 ? "text-yellow-300 font-black" : "text-white"}>Dzień {currentSprintDay} z 14</span></>
               ) : (
-                 <span className="text-yellow-300 font-black">Poczekalnia</span>
+                 <span className="text-yellow-300 font-black">Oczekiwanie na sezon</span>
               )}
             </p>
           </div>
@@ -398,11 +469,11 @@ export default function Home() {
           </span>
         </div>
 
-        {/* --- POCZEKALNIA (JEŚLI SPRINT NIE JEST AKTYWNY) --- */}
-        {!rewards.sprintActive ? (
+        {/* --- POCZEKALNIA (JEŚLI SEZON NIE JEST AKTYWNY) --- */}
+        {!rewards.seasonActive ? (
           <div className="bg-white/95 backdrop-blur-xl p-6 rounded-3xl shadow-2xl mb-8 border border-white/50 text-center text-gray-900">
             <h2 className="text-2xl font-black mb-2">Gotowi do startu? 🚀</h2>
-            <p className="text-gray-500 text-sm mb-6 font-medium">Aby rozpocząć odliczanie 14 dni, obie osoby muszą zgłosić gotowość.</p>
+            <p className="text-gray-500 text-sm mb-6 font-medium">Aby rozpocząć sezon, obie osoby muszą zgłosić gotowość.</p>
             
             {!rivalId ? (
               <button onClick={() => { setShowSettings(true); setActiveSettingsTab('rival'); }} className="bg-gradient-to-r from-violet-600 to-orange-500 text-white px-6 py-3 rounded-xl font-black text-sm hover:scale-105 transition-transform shadow-lg">
@@ -415,7 +486,7 @@ export default function Home() {
                   {isReady ? (
                     <span className="text-green-500 font-black text-lg">✓ Gotowy</span>
                   ) : (
-                    <button onClick={handleSetReady} className="bg-violet-600 text-white px-4 py-2 rounded-xl font-black shadow-lg hover:bg-violet-700 active:scale-95 transition-all">Zgłoś gotowość</button>
+                    <button onClick={handleSetReady} className="bg-violet-600 text-white px-4 py-2 rounded-xl font-black shadow-lg hover:bg-violet-700 active:scale-95 transition-all">Rozpocznij sezon</button>
                   )}
                 </div>
                 <div className="w-px h-16 bg-gray-200 mx-2"></div>
@@ -431,12 +502,25 @@ export default function Home() {
             )}
           </div>
         ) : (
-          /* --- WŁAŚCIWY SPRINT UI (Gdy oboje zaakceptowali) --- */
+          /* --- WŁAŚCIWY SEZON UI --- */
           <>
+            {/* OBUSTORNNE ZGŁASZANIE GOTOWOŚCI DO FINAŁU SPRINTU */}
             {currentSprintDay > 14 && (
-              <div onClick={triggerEndSprintFlow} className="mb-8 bg-gradient-to-r from-yellow-400 to-orange-500 text-black p-5 rounded-3xl shadow-2xl cursor-pointer text-center animate-bounce hover:scale-[1.02] transition-transform">
-                <p className="font-black text-xl uppercase tracking-widest">Koniec czasu!</p>
-                <p className="text-sm font-bold mt-1 opacity-80">Kliknij, aby rozstrzygnąć sprint</p>
+              <div 
+                onClick={async () => {
+                  if (!isReadyToEnd) {
+                    await saveDataToCloud({ isReadyToEnd: true });
+                    notifyRival('INFO', 'Skończył(a) swój sprint. Czeka na Ciebie w finale!');
+                  } else {
+                    await saveDataToCloud({ isReadyToEnd: false }); 
+                  }
+                }} 
+                className={`mb-8 p-5 rounded-3xl shadow-2xl text-center transition-all cursor-pointer ${!isReadyToEnd ? 'bg-gradient-to-r from-yellow-400 to-orange-500 text-black hover:scale-[1.02] animate-bounce' : 'bg-black/40 text-white border border-white/20 backdrop-blur-md'}`}
+              >
+                <p className="font-black text-xl uppercase tracking-widest">{!isReadyToEnd ? 'Czas na finał!' : `Czekam na ${rivalName}...`}</p>
+                <p className={`text-sm font-bold mt-1 ${!isReadyToEnd ? 'opacity-80' : 'text-gray-300'}`}>
+                  {!isReadyToEnd ? 'Jeśli odhaczyłeś zaległości z wczoraj, kliknij tu.' : 'Kliknij ponownie, aby cofnąć gotowość.'}
+                </p>
               </div>
             )}
 
@@ -463,7 +547,7 @@ export default function Home() {
 
             <div className="space-y-4">
               <div className="flex justify-between items-end mb-3 px-2">
-                <h2 className="text-xl font-black drop-shadow-md">{activeDay.isToday ? 'Twoje cele na dziś' : `Historia: ${activeDay.name}, ${activeDay.date}`}</h2>
+                <h2 className="text-xl font-black drop-shadow-md">{activeDay.isToday ? 'Twoje cele' : `Historia: ${activeDay.name}, ${activeDay.date}`}</h2>
                 {isLocked && <span className="text-xs font-black text-white/90 flex gap-1 bg-black/40 px-3 py-1 rounded-full backdrop-blur-sm border border-white/20">🔒 ODCZYT</span>}
               </div>
 
@@ -487,7 +571,7 @@ export default function Home() {
                         <div className="relative z-10">
                           <p className={`font-black text-lg ${isDone ? 'line-through text-gray-400' : 'text-gray-900'}`}>{habit.name}</p>
                           <p className={`text-xs mt-1 font-bold ${habit.type === 'weekly' && weeklyCount >= habit.target ? 'text-green-500' : 'text-gray-500'}`}>
-                            {habit.type === 'daily' ? 'Codziennie' : (weeklyCount >= habit.target ? 'Ukończono na ten tydzień! 🎉' : `${weeklyCount} / ${habit.target} w tym tygodniu`)}
+                            {habit.type === 'daily' ? 'Codziennie' : (weeklyCount >= habit.target ? 'Ukończono w tym tyg! 🎉' : `${weeklyCount} / ${habit.target} w tym tygodniu`)}
                           </p>
                         </div>
                         <div onClick={() => toggleHabit(habit.id)} className={`relative z-10 w-10 h-10 rounded-full border-4 flex items-center justify-center transition-all shadow-md ${isDone ? (isLocked ? 'bg-gray-400 border-gray-400' : 'bg-green-500 border-green-500 scale-110') : 'border-gray-200 bg-gray-50'} ${isLocked ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
@@ -512,7 +596,7 @@ export default function Home() {
                 
                 {showRivalHabits && rivalData.habits && (
                   <div className="mt-4 space-y-3 opacity-60 grayscale-[40%] pointer-events-none transition-all duration-500">
-                    <p className="text-center text-xs font-bold text-white/70 uppercase mb-2">Ekran {rivalName}</p>
+                    <p className="text-center text-xs font-bold text-white/70 uppercase mb-2">Ekran: {rivalName}</p>
                     {rivalData.habits.length === 0 ? (
                       <p className="text-center text-sm italic text-white/50">{rivalName} nie ma jeszcze nawyków.</p>
                     ) : (
@@ -573,7 +657,6 @@ export default function Home() {
                         <p className="font-bold text-gray-900 mb-1">{notif.text}</p>
                         <p className="text-xs text-gray-400 font-medium">Od: {rivalName}</p>
                         
-                        {/* PRZYCISK DO AKCEPTACJI CELOWOŚCI NAWYKU */}
                         {notif.type === 'NEW_HABIT' && notif.habitInfo && !notif.accepted && (
                           <button onClick={() => acceptHabitFromNotif(notif.habitInfo, notif.id)} className="mt-3 bg-green-100 text-green-700 px-4 py-3 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-green-200 transition-colors w-full border border-green-200 shadow-sm active:scale-95">
                             ✓ Akceptuję ten cel (ma sens)
@@ -622,7 +705,7 @@ export default function Home() {
                 <button onClick={() => setActiveSettingsTab('rewards')} className="w-full bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex justify-between items-center hover:bg-gray-50 hover:scale-[1.02] transition-all text-left">
                   <div>
                     <p className="font-black text-xl text-orange-500">🏆 Stawki i Nagrody</p>
-                    <p className="text-sm text-gray-500 mt-1 font-medium">Zmień pulę i rozstrzygnij sprint</p>
+                    <p className="text-sm text-gray-500 mt-1 font-medium">Zmień pulę i zresetuj sezon</p>
                   </div>
                   <span className="text-gray-300 text-2xl font-black">➔</span>
                 </button>
@@ -687,16 +770,17 @@ export default function Home() {
             {activeSettingsTab === 'rewards' && (
               <section className="animate-fade-in">
                 <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
-                  <div className="mb-6 bg-gradient-to-r from-orange-50 to-orange-100 p-5 rounded-2xl border border-orange-200 flex justify-between items-center">
+                  <div className="mb-6 bg-gradient-to-r from-orange-50 to-orange-100 p-5 rounded-2xl border border-orange-200 flex justify-center items-center text-center">
                     <div>
                       <p className="text-xs text-orange-600 font-black uppercase tracking-widest mb-1">Tabela Sezonu</p>
                       <p className="text-lg font-black text-gray-900">Ty: {rewards.myWins} <span className="text-gray-300 mx-2">|</span> {rivalName}: {rewards.rivalWins}</p>
                     </div>
-                    {rewards.sprintActive && (
-                      <button onClick={triggerEndSprintFlow} className="bg-orange-500 text-white px-5 py-3 rounded-xl text-sm font-black shadow-lg shadow-orange-200 hover:scale-105 transition-transform active:scale-95">
-                        Finał Sprintu!
-                      </button>
-                    )}
+                  </div>
+                  
+                  <div className="mb-8 text-center">
+                     <button onClick={resetSeasonScore} className="text-xs text-red-500 font-black uppercase tracking-widest hover:text-red-700 underline underline-offset-4">
+                       Wyzeruj tabelę sezonu (Start 0:0)
+                     </button>
                   </div>
 
                   <div className="mb-8">
@@ -739,7 +823,7 @@ export default function Home() {
       {/* ----------------- MODAL CEREMONII ZAKOŃCZENIA SPRINTU ----------------- */}
       {showEndModal && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 backdrop-blur-xl">
-          <div className="bg-white rounded-[2.5rem] p-8 max-w-sm w-full text-center shadow-2xl relative overflow-hidden text-gray-900">
+          <div className="bg-white rounded-[2.5rem] p-8 max-w-sm w-full text-center shadow-2xl relative overflow-hidden text-gray-900 animate-fade-in">
             <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-violet-500 to-orange-500"></div>
             
             <h2 className="text-4xl font-black mb-2 uppercase tracking-tight mt-2">Finał!</h2>
@@ -747,22 +831,22 @@ export default function Home() {
             <div className="flex justify-center gap-8 my-8 text-xl font-bold">
               <div className="flex flex-col items-center">
                 <span className="text-gray-400 text-xs font-black uppercase tracking-widest mb-1">Ty</span>
-                <span className={myTotalPoints >= rivalTotalPoints ? 'text-violet-600 text-5xl font-black' : 'text-gray-300 text-4xl'}>{myTotalPoints}</span>
+                <span className={frozenPoints?.my >= frozenPoints?.rival ? 'text-violet-600 text-5xl font-black' : 'text-gray-300 text-4xl'}>{frozenPoints?.my}</span>
               </div>
               <div className="flex flex-col items-center">
                 <span className="text-gray-400 text-xs font-black uppercase tracking-widest mb-1">{rivalName}</span>
-                <span className={rivalTotalPoints >= myTotalPoints ? 'text-orange-500 text-5xl font-black' : 'text-gray-300 text-4xl'}>{rivalTotalPoints}</span>
+                <span className={frozenPoints?.rival >= frozenPoints?.my ? 'text-orange-500 text-5xl font-black' : 'text-gray-300 text-4xl'}>{frozenPoints?.rival}</span>
               </div>
             </div>
 
-            <div className="text-2xl font-black mb-8 uppercase tracking-widest bg-gray-50 py-4 rounded-2xl border border-gray-100">
-              {myTotalPoints > rivalTotalPoints ? <span className="text-violet-600">Wygrywasz! 🎉</span> : rivalTotalPoints > myTotalPoints ? <span className="text-orange-500">Przegrywasz... 📉</span> : <span className="text-blue-500">Remis! 🤝</span>}
+            <div className="text-2xl font-black mb-8 uppercase tracking-widest bg-gray-50 py-4 rounded-2xl border border-gray-100 shadow-inner">
+              {frozenPoints?.my > frozenPoints?.rival ? <span className="text-violet-600">Wygrywasz! 🎉</span> : frozenPoints?.rival > frozenPoints?.my ? <span className="text-orange-500">Przegrywasz... 📉</span> : <span className="text-blue-500">Remis! 🤝</span>}
             </div>
 
             {rewards.stake === RANDOM_STAKE && (
               <div className="mb-8 min-h-[140px] flex flex-col justify-center">
-                {!isDrawing && !finalDrawItem && (
-                  <button onClick={startRouletteAnimation} className="w-full bg-gradient-to-r from-purple-600 to-pink-500 text-white py-5 rounded-2xl text-xl font-black uppercase tracking-widest hover:scale-105 transition-transform active:scale-95 shadow-xl shadow-purple-200">
+                {!isDrawing && !rewards.drawnPrize && (
+                  <button onClick={handleDrawClick} className="w-full bg-gradient-to-r from-purple-600 to-pink-500 text-white py-5 rounded-2xl text-xl font-black uppercase tracking-widest hover:scale-105 transition-transform active:scale-95 shadow-xl shadow-purple-200">
                     🎲 Losuj Nagrodę
                   </button>
                 )}
@@ -785,12 +869,8 @@ export default function Home() {
 
             {(rewards.stake !== RANDOM_STAKE || finalDrawItem) && (
               <button onClick={finalizeSprint} className="w-full bg-black text-white py-5 rounded-2xl font-black uppercase tracking-widest shadow-xl hover:bg-gray-800 transition-colors active:scale-95 text-sm">
-                Zakończ i wróć do poczekalni
+                Zacznij kolejny sprint
               </button>
-            )}
-
-            {!isDrawing && !finalDrawItem && rewards.stake === RANDOM_STAKE && (
-               <button onClick={() => setShowEndModal(false)} className="mt-6 text-sm text-gray-400 font-bold uppercase tracking-widest hover:text-gray-600">Wróć (Anuluj)</button>
             )}
           </div>
         </div>
