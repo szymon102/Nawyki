@@ -20,13 +20,12 @@ const getLast7Days = () => {
     
     days.push({
       id: 6 - i, name: dayNames[d.getDay()], date: d.getDate(),
-      fullDate: dateString, locked: i > 1, isToday: i === 0
+      fullDate: dateString, isToday: i === 0 
     });
   }
   return days;
 };
 
-// NOWOŚĆ: Funkcja generująca 14 dat obecnego sprintu do precyzyjnego liczenia punktów
 const getSprintDates = (startDateStr) => {
   const dates = [];
   const start = new Date(startDateStr);
@@ -53,7 +52,6 @@ export default function Home() {
   const weekDays = getLast7Days();
   const [activeDayIndex, setActiveDayIndex] = useState(6); 
   const activeDay = weekDays[activeDayIndex];
-  const isLocked = activeDay.locked;
 
   // USER DATA & SYNC
   const [isReady, setIsReady] = useState(false);
@@ -83,7 +81,7 @@ export default function Home() {
     'Karny trening (pompki/przysiady)'
   ];
   const defaultRewards = {
-    seasonActive: false, // Oznacza, że sezon trwa (niezależnie od tego który to sprint)
+    seasonActive: false, 
     sprintStart: weekDays[6].fullDate,
     stake: RANDOM_STAKE,
     seasonPrize: 'Weekendowy wyjazd',
@@ -146,7 +144,13 @@ export default function Home() {
       } else {
         const newCode = user.uid.substring(0, 5).toUpperCase();
         const displayName = user.displayName?.split(' ')[0] || 'Gracz';
-        saveDataToCloud({ inviteCode: newCode, displayName, isReady: false, isReadyToEnd: false, habits: [], history: {}, notifications: [], rewards: defaultRewards }, user.uid);
+        saveDataToCloud({ 
+          inviteCode: newCode, 
+          displayName, 
+          isReady: false, 
+          isReadyToEnd: false,
+          rewards: defaultRewards
+        }, user.uid);
       }
       setLoading(false);
     });
@@ -191,6 +195,8 @@ export default function Home() {
   };
 
   const handleSetReady = async () => {
+    if (rewards.seasonActive) return; 
+
     if (rivalData?.isReady) {
       const today = new Date();
       if (today.getHours() < 4) today.setDate(today.getDate() - 1);
@@ -233,7 +239,12 @@ export default function Home() {
   };
 
   const saveRewards = async () => {
-    const updatedRewards = { ...rewards, stake: editStake, seasonPrize: editSeasonPrize, pool: rewardPool };
+    const updatedRewards = { 
+        ...rewards, 
+        stake: editStake, 
+        seasonPrize: editSeasonPrize, 
+        pool: rewardPool
+    };
     setRewards(updatedRewards);
     await saveDataToCloud({ rewards: updatedRewards });
     if (rivalId) {
@@ -257,21 +268,18 @@ export default function Home() {
     }
   };
 
-  // NOWA LOGIKA LICZENIA PUNKTÓW: Zlicza TYLKO te dni, które należą do obecnego 14-dniowego okna sprintu
   const calculatePoints = (habitsList, historyData, sprintStartStr) => {
     if (!habitsList || !historyData || !sprintStartStr) return 0;
     let points = 0;
     let bonus = 0;
     const sprintDates = getSprintDates(sprintStartStr);
 
-    // Punkty za dni
     sprintDates.forEach(dateStr => {
       if (historyData[dateStr]) {
         Object.keys(historyData[dateStr]).forEach(habitId => { if (historyData[dateStr][habitId]) points += 1; });
       }
     });
 
-    // Punkty bonusowe za cele tygodniowe (sprawdzamy Tydzień 1 i Tydzień 2 bieżącego sprintu)
     habitsList.forEach(habit => {
       if (habit.type === 'weekly') {
         let week1Count = 0;
@@ -290,10 +298,8 @@ export default function Home() {
   const totalCombined = myTotalPoints + rivalTotalPoints;
   const myPercentage = totalCombined === 0 ? 50 : (myTotalPoints / totalCombined) * 100;
 
-  // LOGIKA OBOPÓLNEGO FINAŁU
   const bothReadyToEnd = isReadyToEnd && rivalData?.isReadyToEnd;
 
-  // Zarządzanie otwarciem i mrożeniem punktów
   useEffect(() => {
     if (bothReadyToEnd && !showEndModal) {
       setShowEndModal(true);
@@ -301,7 +307,6 @@ export default function Home() {
     }
   }, [bothReadyToEnd, showEndModal]);
 
-  // Synchronizacja kręcenia ruletką z bazy na żywo
   useEffect(() => {
     if (showEndModal && rewards.stake === RANDOM_STAKE && rewards.drawnPrize && !finalDrawItem && !isDrawing) {
       startRouletteAnimation(rewards.drawnPrize);
@@ -345,20 +350,18 @@ export default function Home() {
     if (myPts > rivalPts) newMyWins += 1;
     else if (rivalPts > myPts) newRivalWins += 1;
 
-    // Przesuwamy okno startu sprintu o 14 dni do przodu
     const d = new Date(rewards.sprintStart);
     d.setDate(d.getDate() + 14);
     const newStartStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
     const newSprintRewards = {
       ...rewards, 
-      sprintStart: newStartStr, // Płynne wejście w nowy sprint!
+      sprintStart: newStartStr,
       drawnPrize: null,
       myWins: newMyWins, 
       rivalWins: newRivalWins
     };
     
-    // Zamykamy lokalnie żeby zapobiec migotaniu
     setIsReadyToEnd(false);
     setShowEndModal(false);
     setFrozenPoints(null);
@@ -398,7 +401,7 @@ export default function Home() {
   };
 
   const toggleHabit = (habitId) => {
-    if (isLocked) return;
+    // CAŁKOWITY BRAK BLOKAD - można klikać w przeszłości dowoli
     const activeDateString = activeDay.fullDate;
     const currentDayData = history[activeDateString] || {};
     const isDone = currentDayData[habitId] || false;
@@ -406,6 +409,7 @@ export default function Home() {
     const newHistory = { ...history, [activeDateString]: { ...currentDayData, [habitId]: !isDone } };
     saveDataToCloud({ history: newHistory });
     
+    // Powiadomienie tylko jak odhaczamy dzisiejsze
     if (!isDone && activeDay.isToday) {
       const habitObj = habits.find(h => h.id === habitId);
       if (habitObj) notifyRival('INFO', `Świetnie! Właśnie odhaczył(a) zadanie: ${habitObj.name}`);
@@ -548,7 +552,6 @@ export default function Home() {
             <div className="space-y-4">
               <div className="flex justify-between items-end mb-3 px-2">
                 <h2 className="text-xl font-black drop-shadow-md">{activeDay.isToday ? 'Twoje cele' : `Historia: ${activeDay.name}, ${activeDay.date}`}</h2>
-                {isLocked && <span className="text-xs font-black text-white/90 flex gap-1 bg-black/40 px-3 py-1 rounded-full backdrop-blur-sm border border-white/20">🔒 ODCZYT</span>}
               </div>
 
               {habits.length === 0 ? (
@@ -557,7 +560,7 @@ export default function Home() {
                   <button onClick={() => { setShowSettings(true); setActiveSettingsTab('habits'); }} className="bg-white text-violet-600 px-6 py-2 rounded-full font-black text-sm hover:scale-105 transition-transform shadow-lg">Dodaj pierwszy nawyk</button>
                 </div>
               ) : (
-                <div className={`transition-opacity duration-300 ${isLocked ? 'opacity-70' : 'opacity-100'}`}>
+                <div className="transition-opacity duration-300 opacity-100">
                   {habits.map(habit => {
                     const currentDayData = history[activeDay.fullDate] || {};
                     const isDone = currentDayData[habit.id] || false;
@@ -574,7 +577,7 @@ export default function Home() {
                             {habit.type === 'daily' ? 'Codziennie' : (weeklyCount >= habit.target ? 'Ukończono w tym tyg! 🎉' : `${weeklyCount} / ${habit.target} w tym tygodniu`)}
                           </p>
                         </div>
-                        <div onClick={() => toggleHabit(habit.id)} className={`relative z-10 w-10 h-10 rounded-full border-4 flex items-center justify-center transition-all shadow-md ${isDone ? (isLocked ? 'bg-gray-400 border-gray-400' : 'bg-green-500 border-green-500 scale-110') : 'border-gray-200 bg-gray-50'} ${isLocked ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
+                        <div onClick={() => toggleHabit(habit.id)} className={`relative z-10 w-10 h-10 rounded-full border-4 flex items-center justify-center transition-all shadow-md cursor-pointer ${isDone ? 'bg-green-500 border-green-500 scale-110' : 'border-gray-200 bg-gray-50'}`}>
                           {isDone && <span className="text-white text-xl font-black">✓</span>}
                         </div>
                       </div>
@@ -821,7 +824,7 @@ export default function Home() {
       )}
 
       {/* ----------------- MODAL CEREMONII ZAKOŃCZENIA SPRINTU ----------------- */}
-      {showEndModal && (
+      {bothReadyToEnd && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 backdrop-blur-xl">
           <div className="bg-white rounded-[2.5rem] p-8 max-w-sm w-full text-center shadow-2xl relative overflow-hidden text-gray-900 animate-fade-in">
             <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-violet-500 to-orange-500"></div>
