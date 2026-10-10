@@ -29,13 +29,36 @@ const getLast14Days = () => {
   return days;
 };
 
+// Bezpieczne parsowanie dat bez obawy o strefy czasowe
 const getSprintDates = (startDateStr) => {
   const dates = [];
-  const start = new Date(startDateStr);
+  const [y, m, dNum] = startDateStr.split('-');
+  const start = new Date(y, m - 1, dNum);
   for (let i = 0; i < 14; i++) {
     const d = new Date(start);
     d.setDate(d.getDate() + i);
     dates.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+  }
+  return dates;
+};
+
+// NOWA LOGIKA: Zwraca konkretne 7 dni tygodnia sprintu, w którym znajduje się targetDate
+const getWeekDatesForDay = (targetDateStr, sprintStartStr) => {
+  if (sprintStartStr) {
+    const sprintDates = getSprintDates(sprintStartStr);
+    const index = sprintDates.indexOf(targetDateStr);
+    if (index >= 0 && index < 7) return sprintDates.slice(0, 7); // Tydzień 1 sprintu
+    if (index >= 7 && index < 14) return sprintDates.slice(7, 14); // Tydzień 2 sprintu
+  }
+  
+  // Zabezpieczenie (fallback): jeśli sprawdzasz dzień poza sprintem, zlicza 7 dni wstecz od niego
+  const dates = [];
+  const [y, m, dNum] = targetDateStr.split('-');
+  const d = new Date(y, m - 1, dNum);
+  for(let i=6; i>=0; i--) {
+    const temp = new Date(d);
+    temp.setDate(temp.getDate() - i);
+    dates.push(`${temp.getFullYear()}-${String(temp.getMonth() + 1).padStart(2, '0')}-${String(temp.getDate()).padStart(2, '0')}`);
   }
   return dates;
 };
@@ -344,7 +367,6 @@ export default function Home() {
     }
   };
 
-  // ZMIANA: Jedno kliknięcie aktualizuje i synchronizuje obu graczy!
   const finalizeSprint = async () => {
     let newMyWins = rewards.myWins;
     let newRivalWins = rewards.rivalWins;
@@ -372,10 +394,8 @@ export default function Home() {
     setFrozenPoints(null);
     setFinalDrawItem('');
 
-    // Zapisujemy nowy start u siebie
     await saveDataToCloud({ isReadyToEnd: false, rewards: newSprintRewards });
 
-    // AUTOMATYCZNA SYNCHRONIZACJA DLA RYWALA
     if (rivalId) {
       const mirroredRewards = {
         ...newSprintRewards,
@@ -527,7 +547,6 @@ export default function Home() {
         ) : (
           /* --- WŁAŚCIWY SEZON UI --- */
           <>
-            {/* OBUSTORNNE ZGŁASZANIE GOTOWOŚCI DO FINAŁU SPRINTU */}
             {currentSprintDay > 14 && (
               <div 
                 onClick={async () => {
@@ -571,7 +590,7 @@ export default function Home() {
 
             <div className="space-y-4">
               <div className="flex justify-between items-end mb-3 px-2">
-                <h2 className="text-xl font-black drop-shadow-md">{activeDay.isToday ? 'Twoje cele na dziś' : `Historia: ${activeDay.name}, ${activeDay.date}`}</h2>
+                <h2 className="text-xl font-black drop-shadow-md">{activeDay.isToday ? 'Twoje cele' : `Historia: ${activeDay.name}, ${activeDay.date}`}</h2>
               </div>
 
               {habits.length === 0 ? (
@@ -584,10 +603,16 @@ export default function Home() {
                   {habits.map(habit => {
                     const currentDayData = history[activeDay.fullDate] || {};
                     const isDone = currentDayData[habit.id] || false;
+                    
+                    // ZMIANA: Zliczamy punkty dla właściwego tygodnia sprintu!
                     let weeklyCount = 0;
                     if (habit.type === 'weekly') {
-                      weekDays.forEach(day => { if (history[day.fullDate] && history[day.fullDate][habit.id]) weeklyCount++; });
+                      const currentWeekDates = getWeekDatesForDay(activeDay.fullDate, rewards.sprintStart);
+                      currentWeekDates.forEach(dateStr => {
+                        if (history[dateStr] && history[dateStr][habit.id]) weeklyCount++;
+                      });
                     }
+
                     return (
                       <div key={habit.id} className="flex items-center justify-between bg-white/95 p-5 rounded-3xl shadow-xl mb-4 active:scale-[0.98] transition-transform border border-white/50 text-gray-900 relative overflow-hidden">
                         {isDone && <div className="absolute inset-0 bg-green-50/50"></div>}
@@ -626,10 +651,17 @@ export default function Home() {
                       rivalData.habits.map(habit => {
                         const rivalDayData = (rivalData.history && rivalData.history[activeDay.fullDate]) || {};
                         const isDone = rivalDayData[habit.id] || false;
+                        
+                        // ZMIANA: Zliczamy punkty dla właściwego tygodnia sprintu RYWALA
                         let weeklyCount = 0;
                         if (habit.type === 'weekly') {
-                          weekDays.forEach(day => { if (rivalData.history && rivalData.history[day.fullDate] && rivalData.history[day.fullDate][habit.id]) weeklyCount++; });
+                          const rivalSprintStart = rivalData.rewards?.sprintStart || rewards.sprintStart;
+                          const currentWeekDates = getWeekDatesForDay(activeDay.fullDate, rivalSprintStart);
+                          currentWeekDates.forEach(dateStr => {
+                            if (rivalData.history && rivalData.history[dateStr] && rivalData.history[dateStr][habit.id]) weeklyCount++;
+                          });
                         }
+
                         return (
                           <div key={habit.id} className="flex items-center justify-between bg-white/40 p-4 rounded-2xl shadow-sm border border-white/10 text-gray-800">
                             <div>
