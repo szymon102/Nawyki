@@ -7,20 +7,23 @@ import { auth, provider, signInWithPopup, signOut, db } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { doc, getDoc, setDoc, collection, query, where, getDocs, onSnapshot } from 'firebase/firestore';
 
-const getLast7Days = () => {
+const getLast14Days = () => {
   const days = [];
   const today = new Date();
   if (today.getHours() < 4) today.setDate(today.getDate() - 1);
   const dayNames = ['Nd', 'Pn', 'Wt', 'Śr', 'Cz', 'Pt', 'So'];
 
-  for (let i = 6; i >= 0; i--) {
+  for (let i = 13; i >= 0; i--) {
     const d = new Date(today);
     d.setDate(d.getDate() - i);
     const dateString = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     
     days.push({
-      id: 6 - i, name: dayNames[d.getDay()], date: d.getDate(),
-      fullDate: dateString, isToday: i === 0 
+      id: 13 - i,
+      name: dayNames[d.getDay()], 
+      date: d.getDate(),
+      fullDate: dateString, 
+      isToday: i === 0 
     });
   }
   return days;
@@ -49,8 +52,9 @@ export default function Home() {
   const [showRivalHabits, setShowRivalHabits] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
 
-  const weekDays = getLast7Days();
-  const [activeDayIndex, setActiveDayIndex] = useState(6); 
+  // 14-DNIOWY KALENDARZ
+  const weekDays = getLast14Days();
+  const [activeDayIndex, setActiveDayIndex] = useState(13); 
   const activeDay = weekDays[activeDayIndex];
 
   // USER DATA & SYNC
@@ -82,7 +86,7 @@ export default function Home() {
   ];
   const defaultRewards = {
     seasonActive: false, 
-    sprintStart: weekDays[6].fullDate,
+    sprintStart: weekDays[13].fullDate, 
     stake: RANDOM_STAKE,
     seasonPrize: 'Weekendowy wyjazd',
     myWins: 0,
@@ -340,6 +344,7 @@ export default function Home() {
     }
   };
 
+  // ZMIANA: Jedno kliknięcie aktualizuje i synchronizuje obu graczy!
   const finalizeSprint = async () => {
     let newMyWins = rewards.myWins;
     let newRivalWins = rewards.rivalWins;
@@ -367,7 +372,18 @@ export default function Home() {
     setFrozenPoints(null);
     setFinalDrawItem('');
 
+    // Zapisujemy nowy start u siebie
     await saveDataToCloud({ isReadyToEnd: false, rewards: newSprintRewards });
+
+    // AUTOMATYCZNA SYNCHRONIZACJA DLA RYWALA
+    if (rivalId) {
+      const mirroredRewards = {
+        ...newSprintRewards,
+        myWins: newRivalWins,
+        rivalWins: newMyWins
+      };
+      await saveDataToCloud({ isReadyToEnd: false, rewards: mirroredRewards }, rivalId);
+    }
   };
 
   const connectToRival = async () => {
@@ -401,7 +417,6 @@ export default function Home() {
   };
 
   const toggleHabit = (habitId) => {
-    // CAŁKOWITY BRAK BLOKAD - można klikać w przeszłości dowoli
     const activeDateString = activeDay.fullDate;
     const currentDayData = history[activeDateString] || {};
     const isDone = currentDayData[habitId] || false;
@@ -409,7 +424,6 @@ export default function Home() {
     const newHistory = { ...history, [activeDateString]: { ...currentDayData, [habitId]: !isDone } };
     saveDataToCloud({ history: newHistory });
     
-    // Powiadomienie tylko jak odhaczamy dzisiejsze
     if (!isDone && activeDay.isToday) {
       const habitObj = habits.find(h => h.id === habitId);
       if (habitObj) notifyRival('INFO', `Świetnie! Właśnie odhaczył(a) zadanie: ${habitObj.name}`);
@@ -439,6 +453,11 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-violet-600 via-fuchsia-600 to-orange-500 text-white font-sans relative overflow-x-hidden">
       
+      <style>{`
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      `}</style>
+
       {/* ----------------- GŁÓWNY EKRAN APLIKACJI ----------------- */}
       <div className="p-6 pb-24">
         
@@ -539,11 +558,12 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="flex justify-between items-center mb-8 bg-black/20 p-2 rounded-3xl shadow-inner backdrop-blur-sm border border-white/10">
+            {/* POZIOMY 14-DNIOWY KALENDARZ */}
+            <div className="flex gap-2 overflow-x-auto items-center mb-8 bg-black/20 p-3 rounded-3xl shadow-inner backdrop-blur-sm border border-white/10 no-scrollbar">
               {weekDays.map((day) => (
-                <div key={day.id} onClick={() => setActiveDayIndex(day.id)} className={`flex flex-col items-center justify-center w-11 h-16 rounded-2xl cursor-pointer transition-all ${activeDayIndex === day.id ? 'bg-white text-violet-600 shadow-lg scale-110' : 'text-white/60 hover:bg-white/10'}`}>
+                <div key={day.id} onClick={() => setActiveDayIndex(day.id)} className={`flex-shrink-0 flex flex-col items-center justify-center w-14 h-20 rounded-2xl cursor-pointer transition-all ${activeDayIndex === day.id ? 'bg-white text-violet-600 shadow-lg scale-105' : 'text-white/60 hover:bg-white/10'}`}>
                   <span className="text-[10px] font-black uppercase tracking-widest mb-1">{day.name}</span>
-                  <span className={`text-base font-black ${activeDayIndex === day.id ? 'text-violet-600' : 'text-white'}`}>{day.date}</span>
+                  <span className={`text-xl font-black ${activeDayIndex === day.id ? 'text-violet-600' : 'text-white'}`}>{day.date}</span>
                   {day.isToday && activeDayIndex !== day.id && <div className="w-1.5 h-1.5 bg-orange-400 rounded-full mt-1 shadow-[0_0_8px_rgba(251,146,60,0.8)]"></div>}
                 </div>
               ))}
@@ -551,7 +571,7 @@ export default function Home() {
 
             <div className="space-y-4">
               <div className="flex justify-between items-end mb-3 px-2">
-                <h2 className="text-xl font-black drop-shadow-md">{activeDay.isToday ? 'Twoje cele' : `Historia: ${activeDay.name}, ${activeDay.date}`}</h2>
+                <h2 className="text-xl font-black drop-shadow-md">{activeDay.isToday ? 'Twoje cele na dziś' : `Historia: ${activeDay.name}, ${activeDay.date}`}</h2>
               </div>
 
               {habits.length === 0 ? (
